@@ -1,24 +1,28 @@
+# syntax=docker/dockerfile:1.7
+
 # ---- Build Stage ----
-FROM eclipse-temurin:17-jdk AS builder
-WORKDIR /app
+FROM maven:3.9-eclipse-temurin-17 AS builder
+WORKDIR /workspace
 
-# Copy Maven files
-COPY .mvn/ .mvn/
-COPY mvnw pom.xml ./
+# Copy only POM first to leverage layer caching for dependencies
+COPY pom.xml .
+# Pre-fetch dependencies (cached between builds)
+RUN --mount=type=cache,target=/root/.m2 mvn -q -DskipTests dependency:go-offline
 
-# Download dependencies
-RUN ./mvnw dependency:go-offline -B
-
-# Copy source and build
+# Now copy the sources and build
 COPY src ./src
-RUN ./mvnw package -DskipTests -B
+RUN --mount=type=cache,target=/root/.m2 mvn -q -DskipTests package
 
 # ---- Runtime Stage ----
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
-# COPY JAR NAME
-COPY --from=builder /app/target/tradingapplication-0.0.1-SNAPSHOT.jar app.jar
+# (Optional but recommended) run as non-root
+RUN addgroup -S spring && adduser -S spring -G spring
+USER spring:spring
+
+# Copy the jar from the builder (works for SNAPSHOT or release versions)
+COPY --from=builder /workspace/target/*.jar /app/app.jar
 
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["java","-jar","/app/app.jar"]
